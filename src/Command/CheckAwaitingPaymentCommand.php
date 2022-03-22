@@ -249,11 +249,11 @@ final class CheckAwaitingPaymentCommand extends Command
     {
         /** @var string|null $errorName */
         $errorName = $this->accessor->getValue($err, '[name]');
-        if (in_array($errorName, ['UNPROCESSABLE_ENTITY'])) {
+        if ($errorName === 'UNPROCESSABLE_ENTITY') {
             if (!$this->isDry) {
                 // Log error in payment details
                 $payment->setDetails(array_merge($payment->getDetails(), [
-                    'status' => 'FAILED',
+                    'status' => StatusAction::STATE_FAILED,
                     'error' => $err
                 ]));
 

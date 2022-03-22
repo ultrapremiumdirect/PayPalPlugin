@@ -117,7 +117,11 @@ class WebhookService
                     $this->_markOrderStatus($details, $payment, StatusAction::STATUS_COMPLETED);
                     break;
                 default:
-                    $this->_markOrderStatus($details, $payment, StatusAction::STATUS_PROCESSING);
+                    if (isset($details['debug_id'])) {
+                        $this->_processError($details, $payment);
+                    } else {
+                        $this->_markOrderStatus($details, $payment, StatusAction::STATUS_PROCESSING);
+                    }
                     break;
             }
         }
@@ -136,6 +140,8 @@ class WebhookService
 
         // Retrieve Paypal order details
         $details = $this->orderDetailsApi->get($token, $paypalOrderID);
+
+        /** @var string|null $orderDetailstatus */
         $orderDetailstatus = $this->propertyAccessor->getValue($details, '[status]');
 
         if ($orderDetailstatus === StatusAction::STATUS_COMPLETED
@@ -157,20 +163,17 @@ class WebhookService
      */
     private function _markOrderStatus(array $orderDetails, PaymentInterface $payment, string $status): void
     {
-        $detailsPayment = [
+        $detailsPayment = array_merge($payment->getDetails(), [
             'status' => $status,
-            'paypal_order_id' => $this->propertyAccessor->getValue($orderDetails, '[id]'),
-            'reference_id' => $this->propertyAccessor->getValue(
-                $orderDetails, '[purchase_units][0][reference_id]'
-            )
-        ];
+            'paypal_order_details' => $orderDetails
+        ]);
 
         if ($status === StatusAction::STATUS_COMPLETED) {
-            $detailsPayment = array_merge([
+            $detailsPayment = array_merge($detailsPayment, [
                 'transaction_id' => $this->propertyAccessor->getValue(
                     $orderDetails, '[purchase_units][0][payments][captures][0][id]'
                 )
-            ], $detailsPayment);
+            ]);
         }
         $payment->setDetails($detailsPayment);
 
@@ -195,13 +198,15 @@ class WebhookService
      */
     private function _processError(array $err, PaymentInterface $payment): void
     {
-        if ($this->_isProcessorDeclineError($err) || $this->_isUnprocessableEntityError($err)) {
+        /** @var string|null $errorName */
+        $errorName = $this->propertyAccessor->getValue($err, '[name]');
+        if ($errorName === 'UNPROCESSABLE_ENTITY') {
 
             // Log error in payment details
-            $payment->setDetails(array_merge([
+            $payment->setDetails(array_merge($payment->getDetails(), [
                 'status' => StatusAction::STATE_FAILED,
                 'error' => $err
-            ], $payment->getDetails()));
+            ]));
 
             $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
             if ($stateMachine->can(PaymentTransitions::TRANSITION_PROCESS)) {
@@ -212,9 +217,14 @@ class WebhookService
             if ($stateMachine->can(PaymentTransitions::TRANSITION_FAIL)) {
                 $stateMachine->apply(PaymentTransitions::TRANSITION_FAIL);
             }
-
-            $this->paymentManager->flush();
+        } else {
+            // Log error in payment details
+            $payment->setDetails(array_merge($payment->getDetails(), [
+                'error' => $err
+            ]));
         }
+
+        $this->paymentManager->flush();
     }
 
     /**
