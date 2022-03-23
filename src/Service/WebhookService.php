@@ -116,6 +116,9 @@ class WebhookService
                 case 'COMPLETED':
                     $this->_markOrderStatus($details, $payment, StatusAction::STATUS_COMPLETED);
                     break;
+                case 'CREATED':
+                    // Do nothing for now
+                    break;
                 default:
                     if (isset($details['debug_id'])) {
                         $this->_processError($details, $payment);
@@ -217,7 +220,23 @@ class WebhookService
             if ($stateMachine->can(PaymentTransitions::TRANSITION_FAIL)) {
                 $stateMachine->apply(PaymentTransitions::TRANSITION_FAIL);
             }
-        } else {
+        }
+        elseif (in_array($errorName, ['RESOURCE_NOT_FOUND'])) {
+
+            // Log error in payment details
+            $payment->setDetails(array_merge($payment->getDetails(), [
+                'status' => 'CANCELED',
+                'error' => $err
+            ]));
+
+            $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
+            if ($stateMachine->can(PaymentTransitions::TRANSITION_CANCEL)) {
+                $stateMachine->apply(PaymentTransitions::TRANSITION_CANCEL);
+            }
+
+            $this->paymentManager->flush();
+        }
+        else {
             // Log error in payment details
             $payment->setDetails(array_merge($payment->getDetails(), [
                 'error' => $err
