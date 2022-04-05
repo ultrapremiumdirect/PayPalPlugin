@@ -8,6 +8,7 @@ use Sylius\Component\Core\Model\OrderInterface;
 use Sylius\Component\Core\Model\PaymentInterface;
 use Sylius\Component\Core\Model\PaymentMethodInterface;
 use Sylius\Component\Core\OrderCheckoutTransitions;
+use Sylius\Component\Order\StateResolver\StateResolverInterface;
 use Sylius\Component\Payment\Model\PaymentInterface as PaymentInterfaceAlias;
 use Sylius\Component\Payment\PaymentTransitions;
 use Sylius\PayPalPlugin\Api\CacheAuthorizeClientApiInterface;
@@ -16,6 +17,7 @@ use Sylius\PayPalPlugin\Api\OrderDetailsApiInterface;
 use Sylius\PayPalPlugin\Exception\PaymentNotFoundException;
 use Sylius\PayPalPlugin\Payum\Action\StatusAction;
 use Sylius\PayPalPlugin\Provider\PaymentProviderInterface;
+use Sylius\PayPalPlugin\Updater\PaymentUpdaterInterface;
 use Symfony\Component\PropertyAccess\PropertyAccess;
 use Symfony\Component\PropertyAccess\PropertyAccessor;
 
@@ -32,6 +34,8 @@ class WebhookService
     private CompleteOrderApiInterface $completeOrderApi;
     private OrderDetailsApiInterface $orderDetailsApi;
     private PropertyAccessor $propertyAccessor;
+    private PaymentUpdaterInterface $payPalPaymentUpdater;
+    private StateResolverInterface $orderPaymentStateResolver;
 
     public function __construct(
         FactoryInterface                 $stateMachineFactory,
@@ -39,7 +43,9 @@ class WebhookService
         ObjectManager                    $paymentManager,
         CacheAuthorizeClientApiInterface $authorizeClientApi,
         CompleteOrderApiInterface        $completeOrderApi,
-        OrderDetailsApiInterface         $orderDetailsApi
+        OrderDetailsApiInterface         $orderDetailsApi,
+        PaymentUpdaterInterface          $payPalPaymentUpdater,
+        StateResolverInterface           $orderPaymentStateResolver
     )
     {
         $this->stateMachineFactory = $stateMachineFactory;
@@ -49,6 +55,8 @@ class WebhookService
         $this->completeOrderApi = $completeOrderApi;
         $this->orderDetailsApi = $orderDetailsApi;
         $this->propertyAccessor = PropertyAccess::createPropertyAccessor();
+        $this->payPalPaymentUpdater = $payPalPaymentUpdater;
+        $this->orderPaymentStateResolver = $orderPaymentStateResolver;
     }
 
     /**
@@ -138,18 +146,32 @@ class WebhookService
      */
     private function _captureOrder(string $paypalOrderID, PaymentInterface $payment, string $token): void
     {
+        /** @var OrderInterface $order */
+        $order = $payment->getOrder();
+
         // Call to capture Paypal order
         $detailsComplete = $this->completeOrderApi->complete($token, $paypalOrderID);
 
         // Retrieve Paypal order details
         $details = $this->orderDetailsApi->get($token, $paypalOrderID);
 
+        // Update Payment amount
+        /** @var float|null $totalPaypal */
+        $totalPaypal = $this->propertyAccessor->getValue($details, '[purchase_units][0][amount][value]');
+        if (!is_null($totalPaypal)) {
+            $totalPaypalInt = (int) round($totalPaypal * 100);
+            if ($totalPaypalInt != $order->getTotal()) {
+                $this->payPalPaymentUpdater->updateAmount($payment, $totalPaypalInt);
+                $this->orderPaymentStateResolver->resolve($order);
+            }
+        }
+
         /** @var string|null $orderDetailstatus */
         $orderDetailstatus = $this->propertyAccessor->getValue($details, '[status]');
 
         if ($orderDetailstatus === StatusAction::STATUS_COMPLETED
             || $orderDetailstatus === StatusAction::STATUS_PROCESSING) {
-            $this->_markOrderStatus($details, $payment,$orderDetailstatus);
+            $this->_markOrderStatus($details, $payment, $orderDetailstatus);
         } else {
             if (isset($detailsComplete['debug_id'])) {
                 $this->_processError($detailsComplete, $payment);
@@ -220,8 +242,7 @@ class WebhookService
             if ($stateMachine->can(PaymentTransitions::TRANSITION_FAIL)) {
                 $stateMachine->apply(PaymentTransitions::TRANSITION_FAIL);
             }
-        }
-        elseif (in_array($errorName, ['RESOURCE_NOT_FOUND'])) {
+        } elseif (in_array($errorName, ['RESOURCE_NOT_FOUND'])) {
 
             // Log error in payment details
             $payment->setDetails(array_merge($payment->getDetails(), [
@@ -235,8 +256,7 @@ class WebhookService
             }
 
             $this->paymentManager->flush();
-        }
-        else {
+        } else {
             // Log error in payment details
             $payment->setDetails(array_merge($payment->getDetails(), [
                 'error' => $err

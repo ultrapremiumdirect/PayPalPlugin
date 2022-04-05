@@ -292,6 +292,8 @@
             <argument type="service" id="Sylius\PayPalPlugin\Api\CacheAuthorizeClientApiInterface" />
             <argument type="service" id="Sylius\PayPalPlugin\Api\CompleteOrderApiInterface" />
             <argument type="service" id="Sylius\PayPalPlugin\Api\OrderDetailsApiInterface" />
+            <argument type="service" id="Sylius\PayPalPlugin\Updater\PaymentUpdaterInterface" />
+            <argument type="service" id="sylius.state_resolver.order_payment" />
         </service>
     </services>
 </container>
