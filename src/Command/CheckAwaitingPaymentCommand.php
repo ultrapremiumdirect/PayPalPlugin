@@ -13,6 +13,7 @@ use Sylius\Component\Core\Model\ChannelInterface;
 use Sylius\Component\Core\Model\OrderInterface;
 use Sylius\Component\Core\Model\PaymentInterface;
 use Sylius\Component\Core\Model\PaymentMethodInterface;
+use Sylius\Component\Core\OrderCheckoutStates;
 use Sylius\Component\Core\OrderCheckoutTransitions;
 use Sylius\Component\Core\Repository\PaymentRepositoryInterface;
 use Sylius\Component\Payment\PaymentTransitions;
@@ -123,16 +124,6 @@ final class CheckAwaitingPaymentCommand extends Command
                 /** @var OrderInterface $order */
                 $order = $payment->getOrder();
 
-                // Try to complete Order if not
-                $stateMachine = $this->stateMachineFactory->get($order, OrderCheckoutTransitions::GRAPH);
-                if ($stateMachine->can(OrderCheckoutTransitions::TRANSITION_COMPLETE)) {
-                    if (!$this->isDry) {
-                        $stateMachine->apply(OrderCheckoutTransitions::TRANSITION_COMPLETE);
-                    } else {
-                        $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage de l\'order à complete.');
-                    }
-                }
-
                 /** @var PaymentMethodInterface $paymentMethod */
                 $paymentMethod = $payment->getMethod();
                 $token = $this->authorizeClientApi->authorize($paymentMethod);
@@ -142,9 +133,11 @@ final class CheckAwaitingPaymentCommand extends Command
 
                 switch ($this->accessor->getValue($orderDetails, '[status]')) {
                     case 'APPROVED':
+                        $this->ensureOrderCompleted($order);
                         $this->_captureOrder($paypalOrderID, $payment, $token);
                         break;
                     case 'COMPLETED':
+                        $this->ensureOrderCompleted($order);
                         $this->_markOrderStatus($orderDetails, $payment, StatusAction::STATUS_COMPLETED);
                         break;
                     case 'CREATED':
@@ -165,6 +158,21 @@ final class CheckAwaitingPaymentCommand extends Command
         }
 
         return 0;
+    }
+
+    private function ensureOrderCompleted(OrderInterface $order)
+    {
+        if ($order->getCheckoutState() !== OrderCheckoutStates::STATE_COMPLETED) {
+            // Try to complete Order if not
+            $stateMachine = $this->stateMachineFactory->get($order, OrderCheckoutTransitions::GRAPH);
+            if ($stateMachine->can(OrderCheckoutTransitions::TRANSITION_COMPLETE)) {
+                if (!$this->isDry) {
+                    $stateMachine->apply(OrderCheckoutTransitions::TRANSITION_COMPLETE);
+                } else {
+                    $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage de l\'order à complete.');
+                }
+            }
+        }
     }
 
     /**
@@ -247,53 +255,53 @@ final class CheckAwaitingPaymentCommand extends Command
      */
     private function _processError(array $err, PaymentInterface $payment): void
     {
-        /** @var string|null $errorName */
-        $errorName = $this->accessor->getValue($err, '[name]');
-        if ($errorName === 'UNPROCESSABLE_ENTITY') {
-            if (!$this->isDry) {
-                // Log error in payment details
-                $payment->setDetails(array_merge($payment->getDetails(), [
-                    'status' => StatusAction::STATE_FAILED,
-                    'error' => $err
-                ]));
+        switch ($this->accessor->getValue($err, '[name]')) {
+            case 'UNPROCESSABLE_ENTITY':
+                if (!$this->isDry) {
+                    // Log error in payment details
+                    $payment->setDetails(array_merge($payment->getDetails(), [
+                        'status' => 'FAILED',
+                        'error' => $err
+                    ]));
 
-                $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
-                if ($stateMachine->can(PaymentTransitions::TRANSITION_PROCESS)) {
-                    $stateMachine->apply(PaymentTransitions::TRANSITION_PROCESS);
+                    $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
+                    if ($stateMachine->can(PaymentTransitions::TRANSITION_PROCESS)) {
+                        $stateMachine->apply(PaymentTransitions::TRANSITION_PROCESS);
+                    }
+
+                    $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
+                    if ($stateMachine->can(PaymentTransitions::TRANSITION_FAIL)) {
+                        $stateMachine->apply(PaymentTransitions::TRANSITION_FAIL);
+                    }
+
+                    $this->paymentManager->flush();
+                } else {
+                    $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage au status: FAILED');
                 }
+                break;
+            case 'RESOURCE_NOT_FOUND':
+                if (!$this->isDry) {
+                    // Log error in payment details
+                    $payment->setDetails(array_merge($payment->getDetails(), [
+                        'status' => 'CANCELED',
+                        'error' => $err
+                    ]));
 
-                $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
-                if ($stateMachine->can(PaymentTransitions::TRANSITION_FAIL)) {
-                    $stateMachine->apply(PaymentTransitions::TRANSITION_FAIL);
+                    $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
+                    if ($stateMachine->can(PaymentTransitions::TRANSITION_CANCEL)) {
+                        $stateMachine->apply(PaymentTransitions::TRANSITION_CANCEL);
+                    }
+
+                    $this->paymentManager->flush();
+                } else {
+                    $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage au status: CANCELED');
                 }
-
-                $this->paymentManager->flush();
-            } else {
-                $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage au status: FAILED');
-            }
-        }
-        elseif (in_array($errorName, ['RESOURCE_NOT_FOUND'])) {
-            if (!$this->isDry) {
-                // Log error in payment details
-                $payment->setDetails(array_merge($payment->getDetails(), [
-                    'status' => 'CANCELED',
-                    'error' => $err
-                ]));
-
-                $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
-                if ($stateMachine->can(PaymentTransitions::TRANSITION_CANCEL)) {
-                    $stateMachine->apply(PaymentTransitions::TRANSITION_CANCEL);
-                }
-
-                $this->paymentManager->flush();
-            } else {
-                $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage au status: CANCELED');
-            }
-        }
-        else {
-            $this->io->caution('Exception pour le paiement[id:' . $payment->getId() . '] de la commande[id:' . $payment->getOrder()->getId() . ']');
-            $this->io->caution('Détails de l\'erreur :');
-            $this->io->caution(json_encode($err));
+                break;
+            default:
+                $this->io->caution('Exception pour le paiement[id:' . $payment->getId() . '] de la commande[id:' . $payment->getOrder()->getId() . ']');
+                $this->io->caution('Détails de l\'erreur :');
+                $this->io->caution(json_encode($err));
+                break;
         }
     }
 }
