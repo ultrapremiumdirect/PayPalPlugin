@@ -99,15 +99,14 @@ class WebhookService
 
         if (!is_null($payment) && isset($payment->getDetails()['status'])
             && in_array($payment->getDetails()['status'], [StatusAction::STATUS_CREATED, StatusAction::STATUS_PROCESSING])
-            && in_array($payment->getState(), [PaymentInterfaceAlias::STATE_NEW, PaymentInterfaceAlias::STATE_PROCESSING])
+            && in_array($payment->getState(), [PaymentInterfaceAlias::STATE_CART, PaymentInterfaceAlias::STATE_NEW, PaymentInterfaceAlias::STATE_PROCESSING])
         ) {
             /** @var OrderInterface $order */
             $order = $payment->getOrder();
 
-            // Try to complete Order if not
-            $stateMachine = $this->stateMachineFactory->get($order, OrderCheckoutTransitions::GRAPH);
-            if ($stateMachine->can(OrderCheckoutTransitions::TRANSITION_COMPLETE)) {
-                $stateMachine->apply(OrderCheckoutTransitions::TRANSITION_COMPLETE);
+            $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
+            if ($stateMachine->can(PaymentTransitions::TRANSITION_CREATE)) {
+                $stateMachine->apply(PaymentTransitions::TRANSITION_CREATE);
             }
 
             /** @var PaymentMethodInterface $paymentMethod */
@@ -119,9 +118,11 @@ class WebhookService
 
             switch ($this->propertyAccessor->getValue($details, '[status]')) {
                 case 'APPROVED':
+                    $this->ensureOrderCompleted($order);
                     $this->_captureOrder($paypalOrderID, $payment, $token);
                     break;
                 case 'COMPLETED':
+                    $this->ensureOrderCompleted($order);
                     $this->_markOrderStatus($details, $payment, StatusAction::STATUS_COMPLETED);
                     break;
                 case 'CREATED':
@@ -134,6 +135,21 @@ class WebhookService
                         $this->_markOrderStatus($details, $payment, StatusAction::STATUS_PROCESSING);
                     }
                     break;
+            }
+        }
+    }
+
+    private function ensureOrderCompleted(OrderInterface $order)
+    {
+        if ($order->getCheckoutState() !== OrderCheckoutStates::STATE_COMPLETED) {
+            // Try to complete Order if not
+            $stateMachine = $this->stateMachineFactory->get($order, OrderCheckoutTransitions::GRAPH);
+            if ($stateMachine->can(OrderCheckoutTransitions::TRANSITION_COMPLETE)) {
+                if (!$this->isDry) {
+                    $stateMachine->apply(OrderCheckoutTransitions::TRANSITION_COMPLETE);
+                } else {
+                    $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage de l\'order à complete.');
+                }
             }
         }
     }
