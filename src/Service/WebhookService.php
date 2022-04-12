@@ -7,6 +7,7 @@ use SM\Factory\FactoryInterface;
 use Sylius\Component\Core\Model\OrderInterface;
 use Sylius\Component\Core\Model\PaymentInterface;
 use Sylius\Component\Core\Model\PaymentMethodInterface;
+use Sylius\Component\Core\OrderCheckoutStates;
 use Sylius\Component\Core\OrderCheckoutTransitions;
 use Sylius\Component\Order\StateResolver\StateResolverInterface;
 use Sylius\Component\Payment\Model\PaymentInterface as PaymentInterfaceAlias;
@@ -139,17 +140,13 @@ class WebhookService
         }
     }
 
-    private function ensureOrderCompleted(OrderInterface $order)
+    private function ensureOrderCompleted(OrderInterface $order): void
     {
         if ($order->getCheckoutState() !== OrderCheckoutStates::STATE_COMPLETED) {
             // Try to complete Order if not
             $stateMachine = $this->stateMachineFactory->get($order, OrderCheckoutTransitions::GRAPH);
             if ($stateMachine->can(OrderCheckoutTransitions::TRANSITION_COMPLETE)) {
-                if (!$this->isDry) {
-                    $stateMachine->apply(OrderCheckoutTransitions::TRANSITION_COMPLETE);
-                } else {
-                    $this->io->note('[DRY] Payment id:' . $payment->getId() . ' passage de l\'order à complete.');
-                }
+                $stateMachine->apply(OrderCheckoutTransitions::TRANSITION_COMPLETE);
             }
         }
     }
