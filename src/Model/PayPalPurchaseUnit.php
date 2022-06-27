@@ -62,7 +62,7 @@ class PayPalPurchaseUnit
 
     public function __construct(
         string $referenceId,
-        int $customId,
+        string $customId,
         string $invoiceId,
         string $currencyCode,
         int $totalAmount,

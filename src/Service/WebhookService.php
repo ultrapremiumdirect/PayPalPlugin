@@ -119,12 +119,16 @@ class WebhookService
 
             switch ($this->propertyAccessor->getValue($details, '[status]')) {
                 case 'APPROVED':
-                    $this->ensureOrderCompleted($order);
-                    $this->_captureOrder($paypalOrderID, $payment, $token);
+                    if ($this->isOrderFullyPaid($paypalOrderID, $payment, $token)) {
+                        $this->ensureOrderCompleted($order);
+                        $this->_captureOrder($paypalOrderID, $payment, $token);
+                    }
                     break;
                 case 'COMPLETED':
-                    $this->ensureOrderCompleted($order);
-                    $this->_markOrderStatus($details, $payment, StatusAction::STATUS_COMPLETED);
+                    if ($this->isOrderFullyPaid($paypalOrderID, $payment, $token)) {
+                        $this->ensureOrderCompleted($order);
+                        $this->_markOrderStatus($details, $payment, StatusAction::STATUS_COMPLETED);
+                    }
                     break;
                 case 'CREATED':
                     // Do nothing for now
@@ -140,6 +144,71 @@ class WebhookService
         }
     }
 
+    /**
+     * @param string $paypalOrderID
+     * @param PaymentInterface $payment
+     * @param string|null $token
+     * @param bool $processError
+     * @return bool
+     * @throws \SM\SMException
+     */
+    public function isOrderFullyPaid(
+        string $paypalOrderID,
+        PaymentInterface $payment,
+        ?string $token = null,
+        bool $processError = true
+    ): bool
+    {
+        if (is_null($token)) {
+            /** @var PaymentMethodInterface $paymentMethod */
+            $paymentMethod = $payment->getMethod();
+            $token = $this->authorizeClientApi->authorize($paymentMethod);
+        }
+
+        /** @var OrderInterface $order */
+        $order = $payment->getOrder();
+
+        // Retrieve Paypal order details
+        $details = $this->orderDetailsApi->get($token, $paypalOrderID);
+
+        // Update Payment amount
+        /** @var float|null $totalPaypal */
+        $totalPaypal = $this->propertyAccessor->getValue($details, '[purchase_units][0][amount][value]');
+
+        if (is_null($totalPaypal)) {
+            return false;
+        }
+
+        $totalPaypalInt = (int) round($totalPaypal * 100);
+        if ($totalPaypalInt != $order->getTotal()) {
+
+            if ($processError) {
+                // Update amount paid
+                $this->payPalPaymentUpdater->updateAmount($payment, $totalPaypalInt);
+                $this->orderPaymentStateResolver->resolve($order);
+
+                // Mark payment as failed for partial payment
+                $this->_processError([
+                    "name"=> "PARTIAL_PAYMENT",
+                    "message" => sprintf(
+                        "The paid total of the Paypal order %s does not match the total of the Sylius order %s",
+                        $totalPaypalInt,
+                        $order->getTotal()
+                    )
+                ], $payment);
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param OrderInterface $order
+     * @return void
+     * @throws \SM\SMException
+     */
     private function ensureOrderCompleted(OrderInterface $order): void
     {
         if ($order->getCheckoutState() !== OrderCheckoutStates::STATE_COMPLETED) {
@@ -156,6 +225,7 @@ class WebhookService
      * @param PaymentInterface $payment
      * @param string $token
      * @return void
+     * @throws \SM\SMException
      */
     private function _captureOrder(string $paypalOrderID, PaymentInterface $payment, string $token): void
     {
@@ -238,7 +308,7 @@ class WebhookService
     {
         /** @var string|null $errorName */
         $errorName = $this->propertyAccessor->getValue($err, '[name]');
-        if ($errorName === 'UNPROCESSABLE_ENTITY') {
+        if ($errorName === 'UNPROCESSABLE_ENTITY' || $errorName === 'PARTIAL_PAYMENT') {
 
             // Log error in payment details
             $payment->setDetails(array_merge($payment->getDetails(), [
@@ -267,8 +337,6 @@ class WebhookService
             if ($stateMachine->can(PaymentTransitions::TRANSITION_CANCEL)) {
                 $stateMachine->apply(PaymentTransitions::TRANSITION_CANCEL);
             }
-
-            $this->paymentManager->flush();
         } else {
             // Log error in payment details
             $payment->setDetails(array_merge($payment->getDetails(), [

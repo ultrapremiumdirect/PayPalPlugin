@@ -74,8 +74,8 @@ final class CreateOrderApi implements CreateOrderApiInterface
 
         $payPalPurchaseUnit = new PayPalPurchaseUnit(
             $referenceId,
-            (int)$order->getId(),
             (string)$order->getNumber(),
+            $this->paymentReferenceNumberProvider->provide($payment),
             (string)$order->getCurrencyCode(),
             (int)$payment->getAmount(),
             $order->getShippingTotal(),
