@@ -81,7 +81,7 @@ final class CreateOrderApi implements CreateOrderApiInterface
             $order->getShippingTotal(),
             (float)$payPalItemData['total_item_value'],
             (float)$payPalItemData['total_tax'],
-            $order->getOrderPromotionTotal(),
+            abs((int)$payment->getAmount() - (int)(($payPalItemData['total_item_value'] * 100 + $payPalItemData['total_tax']*100 + $order->getShippingTotal()))), //$order->getOrderPromotionTotal(),
             (string)$config['merchant_id'],
             (array)$payPalItemData['items'],
             $order->isShippingRequired(),

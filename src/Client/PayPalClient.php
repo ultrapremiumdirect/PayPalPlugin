@@ -136,7 +136,9 @@ final class PayPalClient implements PayPalClientInterface
         ) {
             $this
                 ->logger
-                ->error(sprintf('%s request to "%s" failed with debug ID %s', $method, $fullUrl, (string) $content['debug_id']))
+                ->error(sprintf('%s request to "%s" failed with debug ID %s', $method, $fullUrl, (string) $content['debug_id']), [
+                    'details' => $content,
+                ])
             ;
         }
 
