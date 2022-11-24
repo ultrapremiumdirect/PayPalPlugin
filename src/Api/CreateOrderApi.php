@@ -81,7 +81,7 @@ final class CreateOrderApi implements CreateOrderApiInterface
             $order->getShippingTotal(),
             (float)$payPalItemData['total_item_value'],
             (float)$payPalItemData['total_tax'],
-            abs((int)$payment->getAmount() - (int)(($payPalItemData['total_item_value'] * 100 + $payPalItemData['total_tax']*100 + $order->getShippingTotal()))), //$order->getOrderPromotionTotal(),
+            $this->getDiscountValue($payment, $order, $payPalItemData), //$order->getOrderPromotionTotal(),
             (string)$config['merchant_id'],
             (array)$payPalItemData['items'],
             $order->isShippingRequired(),
@@ -114,5 +114,10 @@ final class CreateOrderApi implements CreateOrderApiInterface
             [$baseUrl, $order->getTokenValue()],
             ['return_url' => $config['return_url'], 'cancel_url' => $config['cancel_url']]
         );
+    }
+
+    private function getDiscountValue(PaymentInterface $payment, OrderInterface $order, array $payPalItemData): int
+    {
+        return (int)$payment->getAmount() - (int)round(($payPalItemData['total_item_value'] * 100 + $payPalItemData['total_tax'] * 100 + $order->getShippingTotal()));
     }
 }
