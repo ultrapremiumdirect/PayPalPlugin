@@ -9,6 +9,7 @@ use Sylius\Component\Core\Model\PaymentInterface;
 use Sylius\Component\Core\Model\PaymentMethodInterface;
 use Sylius\Component\Core\OrderCheckoutStates;
 use Sylius\Component\Core\OrderCheckoutTransitions;
+use Sylius\Component\Order\OrderTransitions;
 use Sylius\Component\Order\StateResolver\StateResolverInterface;
 use Sylius\Component\Payment\Model\PaymentInterface as PaymentInterfaceAlias;
 use Sylius\Component\Payment\PaymentTransitions;
@@ -324,6 +325,11 @@ class WebhookService
             $stateMachine = $this->stateMachineFactory->get($payment, PaymentTransitions::GRAPH);
             if ($stateMachine->can(PaymentTransitions::TRANSITION_FAIL)) {
                 $stateMachine->apply(PaymentTransitions::TRANSITION_FAIL);
+            }
+
+            $stateMachineOrder = $this->stateMachineFactory->get($payment->getOrder(), OrderTransitions::GRAPH);
+            if ($stateMachineOrder->can(OrderTransitions::TRANSITION_CANCEL)) {
+                $stateMachineOrder->apply(OrderTransitions::TRANSITION_CANCEL);
             }
         } elseif (in_array($errorName, ['RESOURCE_NOT_FOUND'])) {
 
