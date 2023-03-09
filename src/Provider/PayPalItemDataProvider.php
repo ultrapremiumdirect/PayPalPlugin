@@ -22,7 +22,9 @@ final class PayPalItemDataProvider implements PayPalItemDataProviderInterface
         $itemData = [
             'items' => [],
             'total_item_value' => 0,
+            'total_item_value_int' => 0,
             'total_tax' => 0,
+            'total_tax_int' => 0,
         ];
 
         /** @var Collection<int, OrderItemInterface> $orderItems */
@@ -36,7 +38,9 @@ final class PayPalItemDataProvider implements PayPalItemDataProviderInterface
                 $displayQuantity = $nonNeutralTaxes === [0] ? $orderItem->getQuantity() : 1;
                 $itemValue = $orderItem->getUnitPrice();
                 $itemData['total_item_value'] += ($itemValue * $displayQuantity) / 100;
+                $itemData['total_item_value_int'] += $itemValue * $displayQuantity;
                 $itemData['total_tax'] += ($nonNeutralTax * $displayQuantity) / 100;
+                $itemData['total_tax_int'] += $nonNeutralTax * $displayQuantity;
 
                 $itemData['items'][] = [
                     'name' => $orderItem->getProductName(),
